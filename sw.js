@@ -1,5 +1,5 @@
 /* 밥 보고 — 오프라인/빠른 실행용. 앱 수정 후 VER 숫자만 올리면 폰에 새 버전 반영 */
-var VER='rice-v4';
+var VER='rice-v6';
 var FILES=['./','./index.html','./manifest.json','./icon-192.png','./icon-512.png','./icon-maskable-512.png','./apple-touch-icon.png'];
 self.addEventListener('install',function(e){e.waitUntil(caches.open(VER).then(function(c){return c.addAll(FILES)}).then(function(){return self.skipWaiting()}))});
 self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k!==VER}).map(function(k){return caches.delete(k)}))}).then(function(){return self.clients.claim()}))});
