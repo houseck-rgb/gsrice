@@ -136,12 +136,12 @@ function shrink(file,cb){
       .then(function(bm){draw(bm,bm.width,bm.height);bm.close&&bm.close()}).catch(viaImg);
   }else viaImg();
 }
-function setPhoto(k,b,time){var old=state[k];if(old&&old.url)URL.revokeObjectURL(old.url);state[k]={blob:b,time:time};put(k,{blob:b,time:time})}
+function setPhoto(k,b,time){delete COMB[parseInt(k,10)];var old=state[k];if(old&&old.url)URL.revokeObjectURL(old.url);state[k]={blob:b,time:time};put(k,{blob:b,time:time})}
 $('cam').onchange=function(){
   var f=this.files&&this.files[0];if(!f||!cur)return;var k=cur;
   if(f.lastModified&&Date.now()-f.lastModified>180000){ask('갤러리 사진은 안 됩니다.<br>지금 카메라로 직접 찍어주세요.<br><small>No gallery photos. Please take a photo now.</small>',false,function(){});return}
  $('busy').style.display='flex';
-  shrink(f,function(b){setPhoto(k,b,Date.now());$('busy').style.display='none';render()});
+  shrink(f,function(b){setPhoto(k,b,Date.now());$('busy').style.display='none';render();setTimeout(prebuild,50)});
 };
 function reportText(){
   var t='🍚 밥 보고 '+md(Date.now())+'\n(쌀 '+CFG.r+'g / 물 '+CFG.w+'g)\n';
@@ -151,22 +151,59 @@ function reportText(){
   }
   return t;
 }
+/* 밥솥 1개 = 사진 1장 (쌀|물 나란히 + 이름·중량·시간 글씨). 안드로이드는 한 번에 10장까지만 공유돼서 최대 6장으로 합침 */
+var COMB={};
+function loadBm(blob){
+  if(window.createImageBitmap)return createImageBitmap(blob).catch(function(){return viaImgBm(blob)});
+  return viaImgBm(blob);
+}
+function viaImgBm(blob){return new Promise(function(ok,no){var u=URL.createObjectURL(blob),i=new Image();i.onload=function(){ok(i)};i.onerror=no;i.src=u})}
+function combine(i){
+  if(COMB[i])return Promise.resolve(COMB[i]);
+  var r=state[i+'r'],w=state[i+'w'];
+  return Promise.all([loadBm(r.blob),loadBm(w.blob)]).then(function(bm){
+    var H=800,TOP=64,LB=58;
+    var w1=Math.round(bm[0].width*H/bm[0].height),w2=Math.round(bm[1].width*H/bm[1].height);
+    var c=document.createElement('canvas');c.width=w1+w2+8;c.height=TOP+H;
+    var x=c.getContext('2d');x.fillStyle='#16a34a';x.fillRect(0,0,c.width,c.height);
+    x.fillStyle='#fff';x.font='bold 38px sans-serif';x.textBaseline='middle';
+    x.fillText(md(r.time)+'  '+i+'번 밥솥',16,TOP/2);
+    x.drawImage(bm[0],0,TOP,w1,H);x.drawImage(bm[1],w1+8,TOP,w2,H);
+    [[0,w1,'쌀만 '+CFG.r+'g',r.time],[w1+8,w2,'물만 '+CFG.w+'g',w.time]].forEach(function(t){
+      x.fillStyle='rgba(0,0,0,.7)';x.fillRect(t[0],TOP,t[1],LB);
+      x.fillStyle='#fde047';x.font='bold 36px sans-serif';x.fillText(t[2]+'  '+hm(t[3]),t[0]+14,TOP+LB/2);
+    });
+    bm.forEach(function(b){b.close&&b.close()});
+    return new Promise(function(ok){c.toBlob(function(b){c.width=c.height=0;COMB[i]=b;ok(b)},'image/jpeg',0.6)});
+  });
+}
+function readyPots(){var a=[];for(var i=1;i<=N;i++)if(has(i+'r')&&has(i+'w'))a.push(i);return a}
+/* 사진 찍자마자 미리 합쳐 둠 → 공유 버튼 누르면 바로 뜸 */
+function prebuild(){readyPots().reduce(function(p,i){return p.then(function(){return combine(i)})},Promise.resolve()).catch(function(){})}
 $('send').onclick=function(){
-  var text=reportText(),files=[];
-  for(var i=1;i<=N;i++){if(!(has(i+'r')&&has(i+'w')))continue;PARTS.forEach(function(p){var k=i+p.k;if(has(k))files.push(new File([state[k].blob],'밥'+i+'_'+p.l+'.jpg',{type:'image/jpeg'}))})}
-  if(navigator.canShare&&navigator.canShare({files:files})){
-    navigator.share({files:files,text:text}).then(function(){saveHist(text)}).catch(function(e){if(e&&e.name!=='AbortError')copy(text)});
-  }else copy(text);
+  var text=reportText(),pots=readyPots();if(!pots.length)return;
+  var allReady=pots.every(function(i){return COMB[i]});
+  if(!allReady){$('busy').style.display='flex';$('busy').textContent='사진 준비 중… Preparing…'}
+  Promise.all(pots.map(combine)).then(function(bl){
+    $('busy').style.display='none';
+    var files=bl.map(function(b,j){return new File([b],'rice'+pots[j]+'.jpg',{type:'image/jpeg'})});
+    if(!(navigator.canShare&&navigator.canShare({files:files})))return copy(text);
+    navigator.share({files:files}).then(function(){saveHist(text)}).catch(function(e){
+      if(e&&e.name==='AbortError')return;
+      if(!allReady)ask('사진 준비가 끝났어요. 공유 버튼을 한 번 더 눌러주세요.<br><small>Ready. Tap Share again.</small>',false,function(){});
+      else copy(text);
+    });
+  }).catch(function(){$('busy').style.display='none';copy(text)});
 };
-function copy(t){try{navigator.clipboard.writeText(t).then(function(){ask('이 폰은 사진 공유가 안 됩니다.<br>보고 문구를 복사했어요. 카톡에 붙여넣고 사진을 첨부하세요.',false,function(){})})}catch(e){}}
+function copy(t){try{navigator.clipboard.writeText(t).then(function(){ask('사진 공유가 안 됐어요. 크롬(Chrome)에서 열어 다시 눌러주세요.<br><small>Photo share failed. Open in Chrome and try again.</small>',false,function(){})})}catch(e){}}
 function saveHist(t){try{var h=JSON.parse(localStorage.getItem('riceHist')||'[]');h.unshift(t);localStorage.setItem('riceHist',JSON.stringify(h.slice(0,200)))}catch(e){}}
 
 /* 가벼운 화면 안 대화상자 */
 function ask(msg,input,cb){$('dMsg').innerHTML=msg;$('dIn').style.display=input?'block':'none';$('dIn').value='';$('dlg').style.display='flex';if(input)$('dIn').focus();
   $('dOk').onclick=function(){$('dlg').style.display='none';cb($('dIn').value)};$('dNo').onclick=function(){$('dlg').style.display='none'}}
-$('reset').onclick=function(){ask('🔄 사진을 모두 지우고 처음부터 할까요?<br><small>Delete all photos and start over?</small>',false,function(){for(var k in state){if(state[k].url)URL.revokeObjectURL(state[k].url);put(k)}state={};render()})};
+$('reset').onclick=function(){ask('🔄 사진을 모두 지우고 처음부터 할까요?<br><small>Delete all photos and start over?</small>',false,function(){for(var k in state){if(state[k].url)URL.revokeObjectURL(state[k].url);put(k)}state={};COMB={};render()})};
 $('admBtn').onclick=function(){ask('관리자 비밀번호',true,function(v){if(v!=='5324')return;var h=[];try{h=JSON.parse(localStorage.getItem('riceHist')||'[]')}catch(e){}$('hist').innerHTML=h.length?h.map(function(x){return '<li>'+x.replace(/</g,'&lt;')+'</li>'}).join(''):'<li>내역 없음</li>';$('cR').value=CFG.r;$('cW').value=CFG.w;$('cMsg').textContent='';$('adm').style.display='block'})};
-$('cSave').onclick=function(){var r=parseInt($('cR').value,10),w=parseInt($('cW').value,10);if(!(r>0&&w>0)){$('cMsg').style.color='#dc2626';$('cMsg').textContent='숫자를 입력하세요';return}CFG={r:r,w:w};try{localStorage.setItem('riceCfg',JSON.stringify(CFG))}catch(e){}applyCfg();render();$('cMsg').style.color='#16a34a';$('cMsg').textContent='✔ 저장됨: 쌀 '+r+'g / 물 '+w+'g'};
+$('cSave').onclick=function(){var r=parseInt($('cR').value,10),w=parseInt($('cW').value,10);if(!(r>0&&w>0)){$('cMsg').style.color='#dc2626';$('cMsg').textContent='숫자를 입력하세요';return}CFG={r:r,w:w};COMB={};try{localStorage.setItem('riceCfg',JSON.stringify(CFG))}catch(e){}applyCfg();render();$('cMsg').style.color='#16a34a';$('cMsg').textContent='✔ 저장됨: 쌀 '+r+'g / 물 '+w+'g'};
 $('admClose').onclick=function(){$('adm').style.display='none'};
 
 
@@ -206,7 +243,7 @@ window.addEventListener('appinstalled',function(){$('ins').style.display='none';
 setTimeout(function(){showIns(false)},800);
 if('serviceWorker' in navigator&&location.protocol==='https:')window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js')});
 
-render();loadAll(render);
+render();loadAll(function(){render();setTimeout(prebuild,300)});
 </script>
 </body>
 </html>
